@@ -1,9 +1,10 @@
+import sys
 import asyncio
 from nats.aio.client import Client as NATS
 import os, random
 from scapy.all import Ether
 
-async def run():
+async def run(per_ms: int|None = None):
     nc = NATS()
 
     nats_url = os.getenv("NATS_SURVEYOR_SERVERS", "nats://nats:4222")
@@ -15,9 +16,11 @@ async def run():
         #print(f"Received a message on '{subject}': {data}")
         packet = Ether(data)
         print(packet.show())
-        # Publish the received message to outpktsec and outpktinsec
-        #delay = random.expovariate(1 / 5e-6)
-        #await asyncio.sleep(delay)
+
+        if per_ms:
+            delay_per_ms = random.expovariate(1000.0 / per_ms)
+            await asyncio.sleep(delay_per_ms)
+
         if subject == "inpktsec":
             await nc.publish("outpktinsec", msg.data)
         else:
@@ -37,4 +40,7 @@ async def run():
         await nc.close()
 
 if __name__ == '__main__':
-    asyncio.run(run())
+    
+    per_ms = sys.argv[1] if len(sys.argv) > 1 else None
+    per_ms = int(per_ms) if per_ms else None
+    asyncio.run(run(per_ms))

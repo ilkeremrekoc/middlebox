@@ -1,36 +1,111 @@
 import os
-import socket
+import sys
 import time
+import struct
+import random
+import string
+import datetime
 
-def udp_sender():
-    host = os.getenv('INSECURENET_HOST_IP')
-    port = 8888
-    message = "Hello, InSecureNet!"
+import numpy as np
+import scipy.stats
 
-    if not host:
-        print("SECURENET_HOST_IP environment variable is not set.")
-        return
+from scapy.layers.inet import IP, IPOption, UDP
+from scapy.sendrecv import send
 
-    try:
-        # Create a UDP socket
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+# Max amount of CHARS the LSRR can take without breaking the packets
+MAX_CHARS = 36
 
-        while True:
-            # Send message to the server
-            sock.sendto(message.encode(), (host, port))
-            print(f"Message sent to {host}:{port}")
+def encode_message_to_ips(message: str):
+    """
+    Convert a message string into a list of fake IP addresses by encoding
+    4 characters (32 bits) at a time.
+    """
+    # Pad message to a multiple of 4 bytes
+    padded = message.ljust((len(message) + 3) // 4 * 4, '\x00')
+    ips = []
 
-            # Receive response from the server
-            response, server = sock.recvfrom(4096)
-            print(f"Response from server: {response.decode()}")
+    for i in range(0, len(padded), 4):
+        chunk = padded[i:i+4]
+        ip_parts = struct.unpack("BBBB", chunk.encode())
+        ip_str = ".".join(map(str, ip_parts))
+        ips.append(ip_str)
 
-            # Sleep for 1 second
-            time.sleep(1)
+    return ips
 
-    except Exception as e:
-        print(f"An error occurred: {e}")
-    finally:
-        sock.close()
+def split_into_chunks(msg: str):
+    return [msg[i:i + MAX_CHARS] for i in range(0, len(msg), MAX_CHARS)]
+
+def send_covert_packet(dst_ip: str, dst_port: str, covert_msg: str):
+    visible_msg = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    encoded_ips = encode_message_to_ips(covert_msg)
+
+    # LSRR option: type=131 (0x83), length=3 + 4*number_of_ips, pointer=4 (start at first IP)
+    option_data = struct.pack("!BBB", 131, 3 + 4*len(encoded_ips), 4)
+    for ip in encoded_ips:
+        option_data += struct.pack("!4B", *[int(octet) for octet in ip.split('.')])
+
+    lsrr_option = IPOption(option_data)
+
+    # Construct the packet
+    pkt = IP(dst=dst_ip, options=[lsrr_option])/UDP(dport=dst_port)/visible_msg
+    send(pkt)
+    print(f"Covert message sent to {dst_ip}:{dst_port} with LSRR-encoded data.")
+
+def send_large_covert_message(dst_ip, dst_port, full_covert_msg):
+    chunks = split_into_chunks(full_covert_msg)
+
+    for covert_chunk in chunks:
+        send_covert_packet(dst_ip, dst_port, covert_chunk)
+        time.sleep(0.1)  # slight delay between packets
+
+def run_benchmark(dst_ip, dst_port, trials=30, msg_len=12, delay=0.1):
+    timings = []
+
+    for _ in range(trials):
+        covert = ''.join(random.choices(string.ascii_letters + string.digits, k=msg_len))
+        start = time.time()
+
+        send_large_covert_message(dst_ip, dst_port, covert)
+        
+        end = time.time()
+
+        timings.append(end - start)
+        time.sleep(delay)
+
+    report_stats(timings, msg_len=msg_len, trials=trials)
+
+def mean_confidence_interval(data, confidence=0.95):
+    data_float = 1.0 * np.array(data)
+    len_data_float = len(data_float)
+    mean, stderr = np.mean(data_float), scipy.stats.sem(data_float)
+    interval = stderr * scipy.stats.t.ppf((1 + confidence) / 2., len_data_float-1)
+    return mean, interval
+
+def report_stats(timings, msg_len, trials):
+    mean, ci95 = mean_confidence_interval(timings, confidence=0.95)
+    bits_sent = msg_len * 8
+    avg_bps = bits_sent / mean
+
+    print("Benchmark Results:")
+    print(f"  Trials: {trials}")
+    print(f"  Covert message length: {msg_len} chars ({bits_sent} bits)")
+    print(f"  Avg time per message: {mean:.4f} sec")
+    print(f"  95% CI: ±{ci95:.4f} sec")
+    print(f"  Estimated channel capacity: {avg_bps:.2f} bits/sec")
+
+    print(f"[CSV] {msg_len},{trials},{mean:.6f},{ci95:.6f},{avg_bps:.2f}")
 
 if __name__ == "__main__":
-    udp_sender()
+    dst_ip = os.getenv("INSECURENET_HOST_IP")
+    dst_port = 8888
+
+    # Read from CLI args
+    if len(sys.argv) != 3:
+        print("Usage: python3 sender.py <msg_len> <trials>")
+        sys.exit(1)
+
+    msg_len = int(sys.argv[1])
+    trials = int(sys.argv[2])
+
+    run_benchmark(dst_ip, dst_port, trials=trials, msg_len=msg_len, delay=0.2)

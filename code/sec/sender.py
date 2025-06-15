@@ -35,7 +35,7 @@ def encode_message_to_ips(message: str):
 def split_into_chunks(msg: str):
     return [msg[i:i + MAX_CHARS] for i in range(0, len(msg), MAX_CHARS)]
 
-def send_covert_packet(dst_ip: str, dst_port: str, covert_msg: str):
+def send_covert_packet(dst_ip: str, dst_port: str, covert_msg: str, is_covert=True, msg_id=0, msg_len=12):
     visible_msg = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     encoded_ips = encode_message_to_ips(covert_msg)
@@ -48,16 +48,33 @@ def send_covert_packet(dst_ip: str, dst_port: str, covert_msg: str):
     lsrr_option = IPOption(option_data)
 
     # Construct the packet
-    pkt = IP(dst=dst_ip, options=[lsrr_option])/UDP(dport=dst_port)/visible_msg
+    pkt = IP(dst=dst_ip, options=[lsrr_option])/UDP(dport=dst_port)/(("is_covert_" if is_covert else "is_visible_") + f"{msg_id}_{msg_len}_" + visible_msg) 
     send(pkt)
     print(f"Covert message sent to {dst_ip}:{dst_port} with LSRR-encoded data.")
+    print(f"  Covert message: '{covert_msg}'")
 
-def send_large_covert_message(dst_ip, dst_port, full_covert_msg):
+def send_large_covert_message(dst_ip, dst_port, full_covert_msg, is_covert=True, msg_id=0, msg_len=12):
     chunks = split_into_chunks(full_covert_msg)
 
     for covert_chunk in chunks:
-        send_covert_packet(dst_ip, dst_port, covert_chunk)
+        send_covert_packet(dst_ip, dst_port, covert_chunk, is_covert=is_covert, msg_id=msg_id, msg_len=msg_len)
         time.sleep(0.1)  # slight delay between packets
+
+def run_experiment_phase3(dst_ip, dst_port, msg_len=12, delay=0.1, is_covert=True, msg_id=0):
+    """
+    Run a single experiment phase to send a covert message of specified length
+    and measure the time taken.
+    """
+    with open('dummy_text.txt', 'r') as f:
+        dummy_text = f.read().strip()
+
+    if is_covert:
+        rand_start = random.randint(0, len(dummy_text) - msg_len)
+        covert = dummy_text[rand_start:rand_start + msg_len]  # Use a substring of the dummy text
+    else:
+        covert = ''.join(random.choices(string.ascii_letters + string.digits, k=msg_len))
+        
+    send_large_covert_message(dst_ip, dst_port, covert, is_covert=is_covert, msg_id=msg_id, msg_len=msg_len)
 
 def run_benchmark(dst_ip, dst_port, trials=30, msg_len=12, delay=0.1):
     timings = []
@@ -101,11 +118,18 @@ if __name__ == "__main__":
     dst_port = 8888
 
     # Read from CLI args
-    if len(sys.argv) != 3:
+    if len(sys.argv) < 3:
         print("Usage: python3 sender.py <msg_len> <trials>")
         sys.exit(1)
 
-    msg_len = int(sys.argv[1])
-    trials = int(sys.argv[2])
+    if len(sys.argv) == 4 and (sys.argv[2].lower() == "covert" or sys.argv[2].lower() == "visible"):
+        msg_len = int(sys.argv[1])
+        is_covert = sys.argv[2].lower() == "covert"
+        msg_id = int(sys.argv[3])
+        run_experiment_phase3(dst_ip, dst_port, msg_len=msg_len, delay=0.2, is_covert=is_covert, msg_id=msg_id)
+    elif len(sys.argv) == 3:
+        msg_len = int(sys.argv[1])
+        trials = int(sys.argv[2])
+        run_benchmark(dst_ip, dst_port, trials=trials, msg_len=msg_len, delay=0.2)
 
-    run_benchmark(dst_ip, dst_port, trials=trials, msg_len=msg_len, delay=0.2)
+    

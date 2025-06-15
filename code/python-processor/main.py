@@ -12,7 +12,10 @@ from collections import defaultdict
 # Global buffer to collect octets from LSRR routers
 lsrr_octet_buffers = defaultdict(list)
 
-async def run(per_ms: int|None = None):
+# Messages flaggged as covert channels
+flagged_flows = set()
+
+async def run(per_ms: int|None = None, mitigation: bool = False):
     nc = NATS()
 
     nats_url = os.getenv("NATS_SURVEYOR_SERVERS", "nats://nats:4222")
@@ -65,12 +68,21 @@ async def run(per_ms: int|None = None):
                             score = english_freq_match_score(combined)
                             if score >= 6:
                                 is_detected = True
+                                flagged_flows.add(msg_id)
                                 print("LSRR octet stream resembles English text! Possible covert channel.")
                         
                         with open('results.csv', 'a') as f:
                             f.write(f"{msg_id},{msg_len},{is_covert},{is_detected}\n")
-        
 
+                # --- Mitigation: Drop flagged flows ---
+                if mitigation:
+                    if msg_id in flagged_flows:
+                        print(f"Dropping packet from flagged covert channel {msg_id}.")
+                        return  # Skip processing this packet
+                    else:
+                        with open('mitigation_results.csv', 'a') as f:
+                            f.write(f"{msg_id},{is_covert}\n")
+        
         if per_ms:
             delay_per_ms = random.expovariate(1000.0 / per_ms)
             await asyncio.sleep(delay_per_ms)
@@ -95,6 +107,7 @@ async def run(per_ms: int|None = None):
 
 if __name__ == '__main__':
     
-    per_ms = sys.argv[1] if len(sys.argv) > 1 else None
+    mitigation = sys.argv[1] == "mitigation" if len(sys.argv) > 1 else False
+    per_ms = sys.argv[2] if len(sys.argv) > 2 else None
     per_ms = int(per_ms) if per_ms else None
-    asyncio.run(run(per_ms))
+    asyncio.run(run(per_ms, mitigation))
